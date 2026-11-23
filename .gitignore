@@ -1,0 +1,51 @@
+# --- Secrets (NEVER commit) -----------------------------------
+.env
+.env.local
+*.pem
+*.key
+
+# --- Python ---------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Virtualenv -----------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Build artefacts ------------------------------------------
+build/
+dist/
+*.whl
+assets/AppIcon.iconset/
+
+# --- Runtime / logs / runtime DB caches -----------------------
+*.log
+envotrade.log
+.cache/
+
+# --- macOS ----------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+# (intentionally NOT ignoring "Icon?" — collides with assets/icons/ on
+#  case-insensitive HFS+/APFS volumes)
+
+# --- Editors / IDEs -------------------------------------------
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+
+# --- Misc -----------------------------------------------------
+.coverage
+htmlcov/

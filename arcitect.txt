@@ -1,0 +1,178 @@
+===============================================================================
+               ENVORAI AUTONOMOUS TRADING TERMINAL (v1.0)
+               Technical Architecture & System Specification
+===============================================================================
+
+1. SYSTEM PHILOSOPHY & WORKFLOW
+-------------------------------------------------------------------------------
+The Envorai Trading Terminal is a fully autonomous, self-optimizing, high-frequency
+algorithmic trading system designed for macOS. Once the user clicks "Start Bot", 
+the system operates with zero human intervention.
+
+Unlike traditional rule-based bots, Envorai employs a hybrid decision model:
+1. Mathematical Filter: Continuous monitoring via technical indicators (RSI, Bollinger).
+2. Fundamental/Sentiment Filter: Real-time analysis of market data fueled by live 
+   social media trends (Twitter API) and breaking global news (Newsnow API).
+3. Self-Optimization Loop: A daily feedback engine that analyzes execution performance
+   and updates its own hyper-parameters directly in the database to adapt to 
+   changing market volatility.
+
+All tasks are strictly multithreaded and decoupled using thread-safe queues to 
+ensure the CustomTkinter macOS GUI stays fluid at 60 FPS on Retina displays.
+
+
+2. PROJECT DIRECTORY STRUCTURE
+-------------------------------------------------------------------------------
+envorai_bot/
+│
+├── config.py              # Environment variables (Alpaca, DB, Twitter, News keys)
+├── main.py                # Main entry point for the desktop GUI application
+├── requirements.txt       # Dependencies (alpaca-py, customtkinter, pandas, pandas-ta, tweepy)
+│
+├── database/
+│   ├── __init__.py
+│   └── db_manager.py      # PostgreSQL Connection, indexing, and initialization
+│
+├── engine/
+│   ├── __init__.py
+│   ├── bot_coordinator.py # Master orchestrator (Manages and stops worker threads safely)
+│   ├── stream_worker.py   # Alpaca WebSocket live market data streamer
+│   ├── order_worker.py    # Alpaca REST API order execution (Bracket Orders)
+│   └── scanner_worker.py  # High-volatility/High-volume multi-asset scanner
+│
+├── agents/
+│   ├── __init__.py
+│   ├── twitter_agent.py   # Twitter API integration for whale tracking & trend sentiment
+│   └── news_agent.py      # Newsnow/RSS text ingestion for macro analysis
+│
+├── brain/
+│   ├── __init__.py
+│   ├── indicators.py      # Pandas-TA calculations (RSI, Bollinger Bands, MACD)
+│   └── ai_analyst.py      # LLM Decision engine & automated parameter optimizer
+│
+└── ui/
+    ├── __init__.py
+    ├── main_window.py     # Main application grid layout (70% Left, 30% Right)
+    └── components/
+        ├── stats_panel.py # Metrics dashboard cards and embedded Matplotlib canvas
+        └── monitor_panel.py# Real-time scrolling operational logs & Last 100 orders table
+
+
+3. POSTGRESQL DATABASE SCHEMA
+-------------------------------------------------------------------------------
+-- Run these queries to set up the database structure with optimized composite indexes.
+
+CREATE TABLE market_data (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    price NUMERIC(18, 8) NOT NULL,
+    volume NUMERIC(18, 4)
+);
+CREATE INDEX idx_market_data_symbol_time ON market_data(symbol, timestamp DESC);
+
+CREATE TABLE market_sentiment (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    source VARCHAR(20) NOT NULL,     -- 'TWITTER' or 'NEWSNOW'
+    symbol VARCHAR(10) NOT NULL,
+    sentiment_score NUMERIC(3, 2),   -- Range: -1.0 (Very Bearish) to +1.0 (Very Bullish)
+    summary TEXT                     -- AI generated summary of trends/news
+);
+
+CREATE TABLE trading_signals (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    symbol VARCHAR(10) NOT NULL,
+    rsi NUMERIC(5, 2),
+    ai_decision VARCHAR(10),         -- 'BUY', 'SELL', 'HOLD'
+    ai_confidence NUMERIC(5, 2),     -- Confidence score percentage (0-100%)
+    raw_ai_output TEXT
+);
+
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    alpaca_order_id VARCHAR(100) UNIQUE,
+    timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    symbol VARCHAR(10) NOT NULL,
+    side VARCHAR(5) NOT NULL,        -- 'BUY' or 'SELL'
+    qty NUMERIC(18, 8) NOT NULL,
+    price NUMERIC(18, 8) NOT NULL,
+    pnl NUMERIC(18, 8) DEFAULT 0.0,  -- Calculated profit/loss upon close
+    status VARCHAR(20)               -- 'FILLED', 'STOPPED', 'CANCELED'
+);
+
+CREATE TABLE bot_settings (
+    key VARCHAR(50) PRIMARY KEY,
+    value NUMERIC(10, 4) NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    description TEXT
+);
+
+-- Seed initial parameters (The AI analyst will dynamically adjust these later)
+INSERT INTO bot_settings (key, value, description) VALUES 
+('rsi_buy_threshold', 30.00, 'RSI lower bound for BUY signal trigger'),
+('rsi_sell_threshold', 70.00, 'RSI upper bound for SELL signal trigger'),
+('stop_loss_percent', 0.0035, 'Automatic stop loss protection ratio (0.35%)'),
+('take_profit_percent', 0.0060, 'Automatic target take profit ratio (0.60%)'),
+('min_sentiment_score', 0.20, 'Minimum positive sentiment required from outer agents');
+
+
+4. STEP-BY-STEP OPERATIONAL MECHANICS
+-------------------------------------------------------------------------------
+PHASE 1: MULTI-ASSET SCANNING
+- At market open, `scanner_worker.py` fetches the top 10 most volatile and highly
+  liquid crypto/stock pairs from Alpaca.
+- It pushes these targets to `stream_worker.py`, which drops previous connections
+  and opens active WebSocket pipelines to stream live tick data into `market_data`.
+
+PHASE 2: OUTER AGENT MONITORING
+- `twitter_agent.py` tracks developer keywords, institutional flows, and volume alerts.
+- `news_agent.py` constantly scrapes breaking global financial items.
+- A fast local/cloud LLM scores incoming text items from -1.0 to +1.0. These entries
+  populate the `market_sentiment` database table.
+
+PHASE 3: THE HYBRID FILTER SÜZGECİ
+- Step A (Math Filter): `indicators.py` runs Pandas-TA on current DB historical rows.
+  If metrics do not cross thresholds (e.g., RSI is neutral), the execution terminates
+  saving API compute costs.
+- Step B (AI Context Filter): If math indicators trigger (e.g., RSI < 30), the AI 
+  engine awakens. It packages the last 1 hour of price bars, indicators, and recent 
+  Twitter/News sentiment data into a prompt context.
+- Step C (The Verdict): The AI returns a definitive trade direction ('BUY'/'SELL')
+  and a confidence metric. If confidence > threshold, the trade is greenlit.
+
+PHASE 4: EXECUTION & RISK ARCHITECTURE
+- `order_worker.py` dispatches a unified Bracket Order via Alpaca REST API.
+- This includes the initial entry order + an immediate Take Profit order + an immediate
+  Stop Loss order. The position manages and exits itself natively on Alpaca servers.
+
+PHASE 5: SELF-OPTIMIZATION CRON (THE FEEDBACK LOOP)
+- Periodically, `ai_analyst.py` audits the `orders` history table.
+- If it identifies a streak of stopped-out trades due to sudden market noise, it
+  calculates optimal wider bounds and overwrites rows in the `bot_settings` table.
+- The indicator and order modules reload these settings natively before their next cycle.
+
+
+5. DESKTOP DASHBOARD INTERFACE SPECIFICATION
+-------------------------------------------------------------------------------
+The interface partitions the screen into a 70% Left and 30% Right column.
+
+LEFT PANEL (Analytics Hub):
+- Top Metrics Frame: Modern graphical grid cards tracking Live Balance (fetched
+  from Alpaca API), Total Trades Count, and Dynamic Win/Loss Ratio.
+- Main Chart Canvas: A Matplotlib interactive line plot tracking equity curves/PnL over 
+  time. Includes top toggle pills: [Hourly], [Daily], [Weekly]. Pressing these
+  runs asynchronous time-aggregations against the DB and refreshes the canvas.
+- Bottom Bar: Large system action buttons: [Start Bot] (Green) and [Stop Bot] (Red).
+
+RIGHT PANEL (Live Operations & Logs):
+- Live Stream Console (Top 50%): A thread-safe, auto-scrolling `CTkTextbox` redirecting
+  all background tasks, agent activities, network hooks, and AI decision strings.
+- Historical Operations Ledger (Bottom 50%): A scrolling tabular row widget displaying
+  the last 100 executions. Rows adapt color syntax: light green text/background for
+  profitable closed targets, light red for trades knocked out by Stop Loss.
+
+===============================================================================
+                       END OF ARCHITECTURE SPECIFICATION
+===============================================================================

@@ -1,0 +1,19 @@
+#!/bin/bash
+# Envotrade Terminal launcher — runs main.py in the project venv.
+
+# Resolve the project root (this script lives at <root>/Envotrade.app/Contents/MacOS/)
+APP_PATH="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$APP_PATH" || exit 1
+
+# Workaround for macOS Tahoe libexpat ABI mismatch with Homebrew Python
+export DYLD_LIBRARY_PATH="/opt/homebrew/opt/expat/lib:${DYLD_LIBRARY_PATH:-}"
+
+LOG="$APP_PATH/envotrade.log"
+
+if [ ! -x "$APP_PATH/.venv/bin/python" ]; then
+    /usr/bin/osascript -e 'display alert "Envotrade" message "Python venv not found at .venv — run: python3.12 -m venv .venv && pip install -r requirements.txt" as critical'
+    exit 1
+fi
+
+# Launch GUI; capture output for debugging
+exec "$APP_PATH/.venv/bin/python" "$APP_PATH/main.py" >>"$LOG" 2>&1
